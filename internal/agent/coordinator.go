@@ -118,7 +118,7 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 		return nil, errors.New("model provider not configured")
 	}
 
-	mergedOptions, temp, topP, topK, freqPenalty, presPenalty := mergeCallOptions(model, providerCfg.Type)
+	mergedOptions, temp, topP, topK, freqPenalty, presPenalty := mergeCallOptions(model, providerCfg.Type, providerCfg.ExtraBody)
 
 	return c.currentAgent.Run(ctx, SessionAgentCall{
 		SessionID:        sessionID,
@@ -134,11 +134,12 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 	})
 }
 
-func getProviderOptions(model Model, tp catwalk.Type) fantasy.ProviderOptions {
+func getProviderOptions(model Model, tp catwalk.Type, extraBody map[string]any) fantasy.ProviderOptions {
 	options := fantasy.ProviderOptions{}
 
 	cfgOpts := []byte("{}")
 	catwalkOpts := []byte("{}")
+	extraBodyOpts := []byte("{}")
 
 	if model.ModelCfg.ProviderOptions != nil {
 		data, err := json.Marshal(model.ModelCfg.ProviderOptions)
@@ -154,8 +155,19 @@ func getProviderOptions(model Model, tp catwalk.Type) fantasy.ProviderOptions {
 		}
 	}
 
+	// Merge extra_body from provider config (for Z.AI GLM thinking mode, etc.)
+	if extraBody != nil && len(extraBody) > 0 {
+		data, err := json.Marshal(extraBody)
+		if err == nil {
+			extraBodyOpts = data
+		} else {
+			slog.Warn("Failed to marshal extra_body from provider config", "error", err)
+		}
+	}
+
 	readers := []io.Reader{
 		bytes.NewReader(catwalkOpts),
+		bytes.NewReader(extraBodyOpts),
 		bytes.NewReader(cfgOpts),
 	}
 
@@ -172,6 +184,8 @@ func getProviderOptions(model Model, tp catwalk.Type) fantasy.ProviderOptions {
 		slog.Error("Could not create config for call", "err", err)
 		return options
 	}
+
+	slog.Debug("Merged provider options", "options", mergedOptions)
 
 	switch tp {
 	case openai.Name:
@@ -255,8 +269,8 @@ func getProviderOptions(model Model, tp catwalk.Type) fantasy.ProviderOptions {
 	return options
 }
 
-func mergeCallOptions(model Model, tp catwalk.Type) (fantasy.ProviderOptions, *float64, *float64, *int64, *float64, *float64) {
-	modelOptions := getProviderOptions(model, tp)
+func mergeCallOptions(model Model, tp catwalk.Type, extraBody map[string]any) (fantasy.ProviderOptions, *float64, *float64, *int64, *float64, *float64) {
+	modelOptions := getProviderOptions(model, tp, extraBody)
 	temp := cmp.Or(model.ModelCfg.Temperature, model.CatwalkCfg.Options.Temperature)
 	topP := cmp.Or(model.ModelCfg.TopP, model.CatwalkCfg.Options.TopP)
 	topK := cmp.Or(model.ModelCfg.TopK, model.CatwalkCfg.Options.TopK)
@@ -710,5 +724,5 @@ func (c *coordinator) Summarize(ctx context.Context, sessionID string) error {
 	if !ok {
 		return errors.New("model provider not configured")
 	}
-	return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg.Type))
+	return c.currentAgent.Summarize(ctx, sessionID, getProviderOptions(c.currentAgent.Model(), providerCfg.Type, providerCfg.ExtraBody))
 }
